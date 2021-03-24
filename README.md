@@ -1,3 +1,26 @@
+## move_basic (kinetic) - 0.4.1-1
+
+The packages in the `move_basic` repository were released into the `kinetic` distro by running `/usr/bin/bloom-release move_basic --rosdistro kinetic --track kinetic` on `Wed, 24 Mar 2021 13:30:28 -0000`
+
+The `move_basic` package was released.
+
+Version of package(s) in repository `move_basic`:
+
+- upstream repository: https://github.com/UbiquityRobotics/move_basic.git
+- release repository: https://github.com/UbiquityRobotics-release/move_basic-release.git
+- rosdistro version: `0.3.2-0`
+- old version: `0.3.2-0`
+- new version: `0.4.1-1`
+
+Versions of tools used:
+
+- bloom version: `0.10.2`
+- catkin_pkg version: `0.4.23`
+- rosdep version: `0.20.0`
+- rosdistro version: `0.8.3`
+- vcstools version: `0.1.42`
+
+
 ## move_basic (kinetic) - 0.3.2-0
 
 The packages in the `move_basic` repository were released into the `kinetic` distro by running `/usr/bin/bloom-release --ros-distro kinetic --track kinetic move_basic` on `Sat, 03 Mar 2018 22:51:33 -0000`
