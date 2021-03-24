@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Ubiquity Robotics
+ * Copyright (c) 2020, Ubiquity Robotics
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,13 +29,38 @@
  *
  */
 
+#ifndef OBSTACLE_POINTS_H
+#define OBSTACLE_POINTS_H
+
+#include <vector>
+#include <utility>
+#include <mutex>
+
+#include <ros/ros.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 #include <sensor_msgs/Range.h>
 #include <sensor_msgs/LaserScan.h>
 
-#include <mutex>
-
+// lidar sensor
+class LidarSensor
+{
+public:
+    std::string frame_id;
+    double angle_increment;
+    double min_range;
+    double max_range;
+    double min_angle;
+    double max_angle;
+    LidarSensor() {};
+    void reset(const std::string & _frame,
+               const int _increment,
+               const double & _min_range,
+               const double & _max_range,
+               const double & _min_angle,
+               const double & _max_angle);
+};
 
 // a single sensor with current obstacles
 class RangeSensor
@@ -61,72 +86,69 @@ public:
     void update(float range, ros::Time stamp);
 };
 
-// Handle Range messages and computes distance to obstacles
-class ObstacleDetector
+class ObstaclePoints
 {
-   // Line in polar form
-   class PolarLine
-   {
-   public:
-       float radius;
-       float theta;
- 
-       PolarLine(float radius, float theta);
-   };
+private:
+  // Line in polar form
+  class PolarLine
+  {
+  public:
+     float radius;
+     float theta;
 
-   std::map<std::string, RangeSensor> sensors;
-   ros::Subscriber sonar_sub;
-   ros::Subscriber scan_sub;
-   ros::Publisher line_pub;
-   tf2_ros::Buffer *tf_buffer;
-   int sensor_id;
-   // footprint
-   float robot_width;
-   float robot_front_length;
-   float robot_back_length;
+     PolarLine(float radius, float theta);
+  };
 
-   float robot_width_sq;
-   float robot_front_length_sq;
-   float robot_back_length_sq;
-   float front_diag, back_diag;
+  std::mutex points_mutex;
 
-   float max_age;
-   float no_obstacle_dist;
-   std::vector<tf2::Vector3> points;
-   bool have_test_points;
-   std::mutex obstacle_mutex;
+  std::string baseFrame;
 
-   bool have_lidar;
-   tf2::Vector3 lidar_origin;
-   tf2::Vector3 lidar_normal;
-   std::vector<PolarLine> lidar_points;
+  LidarSensor lidar;
+  std::map<std::string, RangeSensor> sensors;
+  ros::Subscriber sonar_sub;
+  ros::Subscriber scan_sub;
+  tf2_ros::Buffer& tf_buffer;
 
-   void draw_line(const tf2::Vector3 &p1, const tf2::Vector3 &p2,
-                  float r, float g, float b, int id);
-   void clear_line(int id);
+  bool have_lidar;
+  tf2::Vector3 lidar_origin;
+  tf2::Vector3 lidar_normal;
+  std::vector<PolarLine> lidar_points;
+  ros::Time lidar_stamp;
 
-   void get_points();
-   void get_lidar_points(std::vector<tf2::Vector3>& points);
+  // Sine / Cosine LookUp Tables
+  std::vector<float> sinLUT, cosLUT;
 
-   void check_dist(float x, bool forward, float& min_dist) const;
-   void check_angle(float theta, float x, float y,
-                    bool left, float& min_dist) const;
-
-   float degrees(float radians) const;
+  // Manually added points, used for unit testing things that
+  // use ObstaclePoints without having to go through ROS messages
+  std::vector<tf2::Vector3> test_points;
 
 public:
-   ObstacleDetector(ros::NodeHandle& nh, tf2_ros::Buffer *tf_buffer);
-   void range_callback(const sensor_msgs::Range::ConstPtr &msg);
-   void scan_callback(const sensor_msgs::LaserScan::ConstPtr &msg);
+  ObstaclePoints(ros::NodeHandle& nh, tf2_ros::Buffer& tf_buffer);
 
-   // return distance in meters to closest obstacle
-   float obstacle_dist(bool forward);
+  void range_callback(const sensor_msgs::Range::ConstPtr &msg);
+  void scan_callback(const sensor_msgs::LaserScan::ConstPtr &msg);
 
-   // return distance in radians to closest obstacle
-   float obstacle_angle(bool left);
+  /*
+   * Returns a vector of all the points that were detected, filtered
+   * by the maximum age.
+   *
+   */
+  std::vector<tf2::Vector3> get_points(ros::Duration max_age);
 
-   // for testing
-   void add_test_point(tf2::Vector3 p);
-   void clear_test_points();
+  /*
+   * Returns a vector of lines (expressed as a pair of 2 points).
+   * The lines are based on the end of the sonar cones, filtered
+   * by the the specified maximum age.
+   *
+   */
+  typedef std::pair<tf2::Vector3, tf2::Vector3> Line;
+  std::vector<Line> get_lines(ros::Duration max_age);
+
+  // Used for unit testing things that use ObstaclePoints
+  // without having to go through ROS messages
+  void add_test_point(tf2::Vector3 p);
+  void clear_test_points();
+
 };
 
+#endif
