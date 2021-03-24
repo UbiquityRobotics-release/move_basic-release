@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Ubiquity Robotics
+ * Copyright (c) 2018-9, Ubiquity Robotics
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@
 
 /*
 
- The `ObstacleDetector` class processes range messages to determine the
+ The `CollisionChecker` class processes range messages to determine the
  distance to obstacles.  As range messages are received, they are used
  to either create or update a `RangeSensor` object.  `RangeSensor` objects
  are created by looking up the transform from `base_link` to their frame
@@ -39,8 +39,8 @@
  cone.
 
  `LaserScan` messages from lidar sensors are also processed. If such data is
- received, the transform from `base_link` to `laser` is looked up to determine
- the scanner's position.
+ received, the transform from `base_link` to the laser's frame is looked up
+ to determine the scanner's position.
 
  The distance to the closest object is calculated based upon the positions
  of the end points of the sensors' cones.  For this purpose, the robot
@@ -69,16 +69,14 @@
 #include <tf2_ros/transform_listener.h>
 #include <sensor_msgs/Range.h>
 #include <visualization_msgs/Marker.h>
-#include "move_basic/obstacle_detector.h"
+#include "move_basic/collision_checker.h"
 
 
-ObstacleDetector::ObstacleDetector(ros::NodeHandle& nh,
-                                   tf2_ros::Buffer *tf_buffer)
+CollisionChecker::CollisionChecker(ros::NodeHandle& nh, tf2_ros::Buffer &tf_buffer,
+		                   ObstaclePoints& op) : tf_buffer(tf_buffer),
+	                                                 ob_points(op)
 {
-    this->tf_buffer = tf_buffer;
-    sensor_id = 0;
-    have_test_points = false;
-    have_lidar = false;
+    nh.param<std::string>("base_frame", baseFrame, "base_link");
 
     line_pub = ros::Publisher(
                  nh.advertise<visualization_msgs::Marker>("/obstacle_viz", 10));
@@ -99,143 +97,15 @@ ObstacleDetector::ObstacleDetector(ros::NodeHandle& nh,
     front_diag = robot_width*robot_width + robot_front_length*robot_front_length;
     back_diag = robot_width*robot_width + robot_back_length*robot_back_length;
 
-    sonar_sub = nh.subscribe("/sonars", 1,
-        &ObstacleDetector::range_callback, this);
-    scan_sub = nh.subscribe("/scan", 1,
-        &ObstacleDetector::scan_callback, this);
 }
 
-void ObstacleDetector::range_callback(const sensor_msgs::Range::ConstPtr &msg)
-{
-    std::string frame = msg->header.frame_id;
-    ROS_DEBUG("Callback %s %f", frame.c_str(), msg->range);
-
-    obstacle_mutex.lock();
-
-    // create sensor object if this is a new sensor
-    std::map<std::string,RangeSensor>::iterator it = sensors.find(frame);
-    if (it == sensors.end()) {
-        try {
-            geometry_msgs::TransformStamped sensor_to_base_tf =
-                tf_buffer->lookupTransform("base_link", frame, ros::Time(0));
-
-            tf2::Transform tf;
-            tf2::Vector3 origin, left_vector, right_vector;
-
-            // sensor origin
-            geometry_msgs::PointStamped sensor_origin;
-            sensor_origin.point.x = 0;
-            sensor_origin.point.y = 0;
-            sensor_origin.point.z = 0;
-            geometry_msgs::PointStamped base_origin;
-            tf2::doTransform(sensor_origin, base_origin, sensor_to_base_tf);
-            fromMsg(base_origin.point, origin);
-            ROS_INFO("origin %f %f %f", origin.x(), origin.y(), origin.z());
-
-            // vectors at the edges of cone when cone height is 1m
-            double theta = msg->field_of_view / 2.0;
-            float x = std::cos(theta);
-            float y = std::sin(theta);
-
-            geometry_msgs::Vector3Stamped sensor_left;
-            sensor_left.vector.x = x;
-            sensor_left.vector.y = -y;
-            sensor_left.vector.z = 0.0;
-            geometry_msgs::Vector3Stamped base_left;
-            tf2::doTransform(sensor_left, base_left, sensor_to_base_tf);
-            fromMsg(base_left.vector, left_vector);
-
-            geometry_msgs::Vector3Stamped sensor_right;
-            sensor_right.vector.x = x;
-            sensor_right.vector.y = y;
-            sensor_right.vector.z = 0.0;
-            geometry_msgs::Vector3Stamped base_right;
-            tf2::doTransform(sensor_right, base_right, sensor_to_base_tf);
-            fromMsg(base_right.vector, right_vector);
-
-            RangeSensor sensor(sensor_id++, frame, origin,
-                               left_vector, right_vector);
-            sensors[frame] = sensor;
-            sensor.update(msg->range, msg->header.stamp);
-        }
-        catch (tf2::TransformException &ex) {
-            ROS_WARN("%s", ex.what());
-        }
-    }
-    else {
-        RangeSensor& sensor = it->second;
-        sensor.update(msg->range, msg->header.stamp);
-        draw_line(sensor.origin, sensor.left_vertex, 0.5, 0.5, 0.5, sensor.id + 200);
-        draw_line(sensor.origin, sensor.right_vertex, 0.5, 0.5, 0.5, sensor.id + 300);
-        draw_line(sensor.left_vertex, sensor.right_vertex, 1, 1, 1,
-            sensor.id + 400);
-    }
-    obstacle_mutex.unlock();
-}
-
-void ObstacleDetector::scan_callback(const sensor_msgs::LaserScan::ConstPtr &msg)
-{
-    float theta = msg->angle_min;
-    float increment = msg->angle_increment;
-    float range_min = msg->range_min;
-
-    if (!have_lidar) {
-        try {
-            geometry_msgs::TransformStamped laser_to_base_tf =
-                tf_buffer->lookupTransform("base_link", "laser", ros::Time(0));
-
-            tf2::Transform tf;
-
-            // lidar origin
-            geometry_msgs::PointStamped origin;
-            origin.point.x = 0;
-            origin.point.y = 0;
-            origin.point.z = 0;
-            geometry_msgs::PointStamped base_origin;
-            tf2::doTransform(origin, base_origin, laser_to_base_tf);
-            fromMsg(base_origin.point, lidar_origin);
-
-            // normal vector
-            geometry_msgs::Vector3Stamped normal;
-            normal.vector.x = 1.0;
-            normal.vector.y = 0.0;
-            normal.vector.z = 0.0;
-            geometry_msgs::Vector3Stamped base_normal;
-            tf2::doTransform(normal, base_normal, laser_to_base_tf);
-            fromMsg(base_normal.vector, lidar_normal);
-
-            have_lidar = true;
-        }
-        catch (tf2::TransformException &ex) {
-            ROS_WARN("%s", ex.what());
-            return;
-        }
-    }
-
-    obstacle_mutex.lock();
-    lidar_points.clear();
-
-    for (const auto& r : msg->ranges) {
-        theta += increment;
-
-        // ignore bogus samples
-        if (std::isnan(r) || r < range_min || r > no_obstacle_dist) {
-            continue;
-        }
-
-        lidar_points.push_back(PolarLine(r, theta));
-    }
-    obstacle_mutex.unlock();
-}
-
-
-void ObstacleDetector::draw_line(const tf2::Vector3 &p1, const tf2::Vector3 &p2,
+void CollisionChecker::draw_line(const tf2::Vector3 &p1, const tf2::Vector3 &p2,
                             float r, float g, float b, int id)
 {
     visualization_msgs::Marker line;
     line.type = visualization_msgs::Marker::LINE_LIST;
     line.action = visualization_msgs::Marker::MODIFY;
-    line.header.frame_id = "/base_link";
+    line.header.frame_id = baseFrame;
     line.color.r = r;
     line.color.g = g;
     line.color.b = b;
@@ -257,7 +127,7 @@ void ObstacleDetector::draw_line(const tf2::Vector3 &p1, const tf2::Vector3 &p2,
     line_pub.publish(line);
 }
 
-void ObstacleDetector::clear_line(int id)
+void CollisionChecker::clear_line(int id)
 {
     visualization_msgs::Marker line;
     line.type = visualization_msgs::Marker::LINE_LIST;
@@ -266,49 +136,7 @@ void ObstacleDetector::clear_line(int id)
     line_pub.publish(line);
 }
 
-// Get points from range sensor cones
-void ObstacleDetector::get_points()
-{
-    ros::Time now = ros::Time::now();
-
-    obstacle_mutex.lock();
-
-    if (!have_test_points) {
-        points.clear();
-    }
-
-    for (const auto& kv : sensors) {
-        const RangeSensor& sensor = kv.second;
-
-        float age = (now - sensor.stamp).toSec();
-        if (age < max_age) {
-           points.push_back(sensor.left_vertex);
-           points.push_back(sensor.right_vertex);
-        }
-    }
-    obstacle_mutex.unlock();
-}
-
-// Get points from lidar - convert from polar to cartesian coords
-void ObstacleDetector::get_lidar_points(std::vector<tf2::Vector3>& points)
-{
-    obstacle_mutex.lock();
-    for (const auto& p : lidar_points) {
-        float sin_theta = std::sin(p.theta);
-        float cos_theta = std::cos(p.theta);
-
-        float x = lidar_origin.x() + p.radius * (lidar_normal.x() * cos_theta -
-             lidar_normal.y() * sin_theta);
-
-        float y = lidar_origin.y() + p.radius * (lidar_normal.y() * cos_theta +
-             lidar_normal.x() * sin_theta);
-
-        points.push_back(tf2::Vector3(x, y, 0));
-    }
-    obstacle_mutex.unlock();
-}
-
-inline void ObstacleDetector::check_dist(float x, bool forward, float& min_dist) const
+inline void CollisionChecker::check_dist(float x, bool forward, float& min_dist) const
 {
     if (forward && x > robot_front_length) {
         if (x < min_dist) {
@@ -322,58 +150,169 @@ inline void ObstacleDetector::check_dist(float x, bool forward, float& min_dist)
     }
 }
 
-float ObstacleDetector::obstacle_dist(bool forward)
+float CollisionChecker::obstacle_dist(bool forward,
+                                      float &min_dist_left,
+                                      float &min_dist_right,
+                                      tf2::Vector3 &fl,
+                                      tf2::Vector3 &fr)
 {
     float min_dist = no_obstacle_dist;
-    ros::Time now = ros::Time::now();
+    min_dist_left = no_obstacle_dist;
+    min_dist_right = no_obstacle_dist;
 
-    obstacle_mutex.lock();
-
-    for (const auto& kv : sensors) {
-        const RangeSensor& sensor = kv.second;
-        float age = (now - sensor.stamp).toSec();
-        if (age < max_age) {
-            float x0 = sensor.left_vertex.x();
-            float y0 = sensor.left_vertex.y();
-            float x1 = sensor.right_vertex.x();
-            float y1 = sensor.right_vertex.y();
-            if ((y1 < -robot_width && robot_width < y0) ||
-                (y0 < -robot_width && robot_width < y1)) {
-                // linear interpolate to get closest point inside width
-                float x = 0;
-                if (x0 < x1) {
-                    float a = (y0 - robot_width) / (y1 - y0);
-                    x = x1 * a + x0 * (1 - a);
-                }
-                else {
-                    float a = (y0 + robot_width) / (y1 - y0);
-                    x = x1 * a + x0 * (1 - a);
-                }
-                check_dist(x, forward, min_dist);
-            }
-            if (-robot_width < y0 && y0 < robot_width) {
-                check_dist(x0, forward, min_dist);
-            }
-            if (-robot_width < y1 && y1 < robot_width) {
-                check_dist(x1, forward, min_dist);
-            }
-        }
+    auto lines = ob_points.get_lines(ros::Duration(max_age));
+    for (const auto& points : lines) {
+	float x0 = points.first.x();
+	float y0 = points.first.y();
+	float x1 = points.second.x();
+	float y1 = points.second.y();
+	// Forward and rear limits
+	if (y0 < -robot_width && robot_width < y1) {
+	    // linear interpolate to get closest point inside width
+	    float ylen = y1 - y0;
+	    float a0 = (y0 - robot_width) / ylen;
+	    float a1 = (y1 - robot_width - y0) / ylen;
+	    check_dist(a0 * x0 + (1.0 - a0) * x1, forward, min_dist);
+	    check_dist(a1 * x1 + (1.0 - a1) * x0, forward, min_dist);
+	}
+	else if (y1 < -robot_width && robot_width < y0) {
+	    // linear interpolate to get closest point inside width
+	    float ylen = y0 - y1;
+	    float a0 = (y0 - robot_width - y1) / ylen;
+	    float a1 = (y1 - robot_width) / ylen;
+	    check_dist(a0 * x0 + (1.0 - a0) * x1, forward, min_dist);
+	    check_dist(a1 * x1 + (1.0 - a1) * x0, forward, min_dist);
+	}
+	else {
+	    if (-robot_width < y0 && y0 < robot_width) {
+		check_dist(x0, forward, min_dist);
+	    }
+	    if (-robot_width < y1 && y1 < robot_width) {
+		check_dist(x1, forward, min_dist);
+	    }
+	}
+	// Sides
+	if (x0 < -robot_back_length && x1 > robot_front_length) {
+	    // linear interpolate to get closest point in side
+	    float xlen = x1 - x0;
+	    float ab = (-x0 - robot_back_length) / xlen;
+	    float af = (x1 - robot_front_length - x0) / xlen;
+	    float yb = ab * y0 + (1.0 - ab) * y1;
+	    float yf = af * y1 + (1.0 - af) * y0;
+	    if (yb > 0 && yb < min_dist_left) {
+		min_dist_left = yb;
+	    }
+	    if (yb < 0 && -yb < min_dist_right) {
+		min_dist_right = -yb;
+	    }
+	    if (yf> 0 && yf < min_dist_left) {
+		min_dist_left = yf;
+	    }
+	    if (yf < 0 && -yf < min_dist_right) {
+		min_dist_right = -yf;
+	    }
+	}
+	else if (x1 < -robot_back_length && x0 > robot_front_length) {
+	    // linear interpolate to get closest point in side
+	    float xlen = x0 - x1;
+	    float ab = (-x1 - robot_back_length) / xlen;
+	    float af = (x0 - robot_front_length - x1) / xlen;
+	    float yb = ab * y1 + (1.0 - ab) * y0;
+	    float yf = af * y0 + (1.0 - af) * y1;
+	    if (yb > 0 && yb < min_dist_left) {
+		min_dist_left = yb;
+	    }
+	    if (yb < 0 && -yb < min_dist_right) {
+		min_dist_right = -yb;
+	    }
+	    if (yf> 0 && yf < min_dist_left) {
+		min_dist_left = yf;
+	    }
+	    if (yf < 0 && -yf < min_dist_right) {
+		min_dist_right = -yf;
+	    }
+	}
+	else {
+	    if (x0 > -robot_back_length && x0 < robot_front_length) {
+		if (y0 > 0 && y0 < min_dist_left) {
+		    min_dist_left = y0;
+		}
+		if (y0 < 0 && -y0 < min_dist_right) {
+		    min_dist_right = -y0;
+		}
+	    }
+	    if (x1 > -robot_back_length && x1 < robot_front_length) {
+		if (y1> 0 && y1 < min_dist_left) {
+		    min_dist_left = y1;
+		}
+		if (y1 < 0 && -y1 < min_dist_right) {
+		    min_dist_right = -y1;
+		}
+	    }
+	}
     }
-    obstacle_mutex.unlock();
 
-    // check lidar points
-    std::vector<tf2::Vector3> pts;
-    get_lidar_points(pts);
+    // Forward side points
+    fl.setX(robot_front_length);
+    fl.setY(min_dist_left);
+    fr.setX(robot_front_length);
+    fr.setY(min_dist_right);
+
+    auto pts = ob_points.get_points(ros::Duration(max_age));
     for (const auto& p : pts) {
        float y = p.y();
+       float x = p.x();
+       // Forward and rear
        if (-robot_width < y && y < robot_width) {
-            check_dist(p.x(), forward, min_dist);
-        }
+          check_dist(x, forward, min_dist);
+       }
+       // Sides
+       if (x > -robot_back_length && x < robot_front_length) {
+          if (y > 0 && y < min_dist_left) {
+	     min_dist_left = y;
+	  }
+	  else if (y < 0 && -y < min_dist_right) {
+             min_dist_right = -y;
+	  }
+       }
     }
 
+    // Green lines at sides
+    draw_line(tf2::Vector3(robot_front_length, min_dist_left, 0),
+              tf2::Vector3(-robot_back_length, min_dist_left, 0), 0, 1, 0, 20000);
+    draw_line(tf2::Vector3(robot_front_length, min_dist_left, 0),
+              tf2::Vector3(robot_front_length + 2, min_dist_left, 0), 0, 0.5, 0, 20001);
+
+    draw_line(tf2::Vector3(robot_front_length, -min_dist_right, 0),
+              tf2::Vector3(-robot_back_length, -min_dist_right, 0), 0, 1, 0, 20002);
+
+    draw_line(tf2::Vector3(robot_front_length, -min_dist_right, 0),
+              tf2::Vector3(robot_front_length + 2, -min_dist_right, 0), 0, 0.5, 0, 20003);
+
+    // Blue
+    draw_line(tf2::Vector3(robot_front_length, min_dist_left, 0),
+              tf2::Vector3(fl.x(), fl.y(), 0), 0, 0, 1, 30000);
+
+    draw_line(tf2::Vector3(robot_front_length, -min_dist_right, 0),
+              tf2::Vector3(fr.x(), -fr.y(), 0), 0, 0, 1, 30001);
+
+    // Min side dist
+    draw_line(tf2::Vector3(robot_front_length, -robot_width -min_side_dist, 0),
+              tf2::Vector3(robot_front_length + 2, -robot_width -min_side_dist, 0), 0.5, 0.5, 0, 40001);
+
+    draw_line(tf2::Vector3(robot_front_length, robot_width+min_side_dist, 0),
+              tf2::Vector3(robot_front_length + 2, robot_width+min_side_dist, 0), 0.5, 0.5, 0, 40002);
+
+    // Red line at front or back
     if (forward) {
         draw_line(tf2::Vector3(min_dist, -robot_width, 0),
                   tf2::Vector3(min_dist, robot_width, 0), 1, 0, 0, 10000);
+
+        draw_line(tf2::Vector3(min_dist, -robot_width - 2, 0),
+                  tf2::Vector3(min_dist, -robot_width, 0), 0.5, 0, 0, 10020);
+
+        draw_line(tf2::Vector3(min_dist, robot_width + 2, 0),
+                  tf2::Vector3(min_dist, robot_width, 0), 0.5, 0, 0, 10030);
         min_dist -= robot_front_length;
     }
     else {
@@ -381,10 +320,13 @@ float ObstacleDetector::obstacle_dist(bool forward)
                   tf2::Vector3(-min_dist, robot_width, 0), 1, 0, 0, 10000);
         min_dist -= robot_back_length;
     }
+
+    min_dist_left -= robot_width;
+    min_dist_right -= robot_width;
     return min_dist;
 }
 
-float ObstacleDetector::degrees(float radians) const
+float CollisionChecker::degrees(float radians) const
 {
     return radians * 180.0 / M_PI;
 }
@@ -394,7 +336,7 @@ float ObstacleDetector::degrees(float radians) const
  initial rotation of theta to (x, y), and store the smallest
  value
 */
-inline void ObstacleDetector::check_angle(float theta, float x, float y,
+inline void CollisionChecker::check_angle(float theta, float x, float y,
                                           bool left, float& min_dist) const
 {
     float theta_int = theta - std::atan2(y, x);
@@ -412,14 +354,11 @@ inline void ObstacleDetector::check_angle(float theta, float x, float y,
     }
 }
 
-float ObstacleDetector::obstacle_angle(bool left)
+float CollisionChecker::obstacle_angle(bool left)
 {
     float min_angle = M_PI;
-    ros::Time now = ros::Time::now();
 
-    get_points();
-    get_lidar_points(points);
-
+    auto points = ob_points.get_points(ros::Duration(max_age));
     // draw footprint
     draw_line(tf2::Vector3(robot_front_length, robot_width, 0),
               tf2::Vector3(-robot_back_length, robot_width, 0),
@@ -524,41 +463,72 @@ float ObstacleDetector::obstacle_angle(bool left)
     return min_angle;
 }
 
-void ObstacleDetector::add_test_point(tf2::Vector3 p)
-{
-    points.push_back(p);
-    have_test_points = true;
-}
 
-void ObstacleDetector::clear_test_points()
-{
-    have_test_points = false;
-    points.clear();
-}
+float CollisionChecker::obstacle_arc_angle(double linear, double angular) {
+    const float radius = (float) std::abs(linear/angular);
+    const bool forward = linear >= 0;
+    const bool left = angular >= 0;
 
-RangeSensor::RangeSensor(int id, std::string frame_id,
-                         const tf2::Vector3& origin,
-                         const tf2::Vector3& left_vec,
-                         const tf2::Vector3& right_vec)
-{
-    this->id = id;
-    this->frame_id = frame_id;
-    this->origin = origin;
-    this->left_vec = left_vec;
-    this->right_vec = right_vec;
-    ROS_INFO("Adding sensor %s", frame_id.c_str());
-}
+    // Point of rotation relative to base_link
+    const auto point_of_rotation = tf2::Vector3(0, (left) ? radius : -radius, 0);
 
-void RangeSensor::update(float range, ros::Time stamp)
-{
-    this->stamp = stamp;
-    left_vertex = origin + left_vec * range;
-    right_vertex = origin + right_vec * range;
-}
+    // Critical robot corners relative to point of rotation
+    const auto outer_point = tf2::Vector3(-robot_back_length,
+            (left) ? -robot_width: robot_width, 0) - point_of_rotation;
+    const auto inner_point = tf2::Vector3(robot_front_length,
+            (left) ? robot_width: -robot_width, 0) - point_of_rotation;
 
-ObstacleDetector::PolarLine::PolarLine(float radius, float theta)
-{
-    this->radius = radius;
-    this->theta = theta;
-}
+    // Critical robot points in polar (r^2, theta) form relative to center
+    // of rotation
+    const float outer_radius_sq = outer_point.length2();
+    const float outer_theta = std::atan2(outer_point.y(), outer_point.x());
+    const float inner_radius_sq = inner_point.length2();
+    //Not used const float inner_theta = std::atan2(inner_point.x(), -inner_point.y());
 
+    // Utility function to make sure that the angle relevant and not behind the robot
+    const auto angle_relevant = [&outer_theta, &left, &forward](float angle) -> bool {
+        if (forward) {
+            if (left) {
+                return angle > outer_theta;
+            } else {
+                return angle < outer_theta;
+            }
+        } else {
+            if (angle < 0) {
+                angle += 2.0 * M_PI;
+            }
+
+            if (left) {
+                return angle < outer_theta;
+            } else {
+                return angle > outer_theta;
+            }
+        }
+    };
+
+    float closest_angle = M_PI;
+    const auto points = ob_points.get_points(ros::Duration(max_age));
+    for (const auto& p : points) {
+        // Trasform the obstacle point into the coordiate system with the
+        // point of rotation at the origin, with the same orientation as base_link
+        const tf2::Vector3 p_in_rot = p - point_of_rotation;
+        // Radius for polar coordinates around center of rotation
+        const float p_radius_sq = p_in_rot.length2();
+
+        if(p_radius_sq < outer_radius_sq && p_radius_sq > inner_radius_sq) {
+            // Angle for polar coordinates around center of rotation
+            const float p_theta = std::atan2(p_in_rot.y(), p_in_rot.x());
+            if (angle_relevant(p_theta) && p_theta < M_PI) {
+                // TODO: This assumes that any collision with the point will be
+                // on the leading part of the robot, when in reality we can turn more
+                // than this amount if the point only causes a collision with the rear
+                // part of the robot as it swings around for a turn
+                closest_angle = std::min(closest_angle, p_theta);
+            }
+        }
+    }
+
+    // TODO: Check obstacle lines for intersection with robot arc
+
+    return closest_angle;
+}
