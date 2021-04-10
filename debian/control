@@ -1,0 +1,12 @@
+Source: ros-melodic-move-basic
+Section: misc
+Priority: optional
+Maintainer: Jim Vaughan <jimv@mrjim.com>
+Build-Depends: debhelper (>= 9.0.0), ros-melodic-actionlib, ros-melodic-actionlib-msgs, ros-melodic-catkin, ros-melodic-dynamic-reconfigure, ros-melodic-geometry-msgs, ros-melodic-message-generation, ros-melodic-message-runtime, ros-melodic-move-base-msgs, ros-melodic-nav-core, ros-melodic-roscpp, ros-melodic-rostest, ros-melodic-sensor-msgs, ros-melodic-std-msgs, ros-melodic-tf2, ros-melodic-tf2-geometry-msgs, ros-melodic-tf2-ros, ros-melodic-visualization-msgs
+Homepage: 
+Standards-Version: 3.9.2
+
+Package: ros-melodic-move-basic
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, ros-melodic-actionlib, ros-melodic-actionlib-msgs, ros-melodic-dynamic-reconfigure, ros-melodic-geometry-msgs, ros-melodic-message-generation, ros-melodic-message-runtime, ros-melodic-move-base-msgs, ros-melodic-nav-core, ros-melodic-roscpp, ros-melodic-rostest, ros-melodic-sensor-msgs, ros-melodic-std-msgs, ros-melodic-tf2, ros-melodic-tf2-geometry-msgs, ros-melodic-tf2-ros, ros-melodic-visualization-msgs
+Description: Simple navigation package
