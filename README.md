@@ -1,3 +1,26 @@
+## move_basic (melodic) - 0.4.1-1
+
+The packages in the `move_basic` repository were released into the `melodic` distro by running `/usr/bin/bloom-release move_basic --track melodic --rosdistro melodic --new-track` on `Sat, 10 Apr 2021 12:47:31 -0000`
+
+The `move_basic` package was released.
+
+Version of package(s) in repository `move_basic`:
+
+- upstream repository: https://github.com/UbiquityRobotics/move_basic.git
+- release repository: unknown
+- rosdistro version: `null`
+- old version: `null`
+- new version: `0.4.1-1`
+
+Versions of tools used:
+
+- bloom version: `0.10.3`
+- catkin_pkg version: `0.4.23`
+- rosdep version: `0.20.0`
+- rosdistro version: `0.8.3`
+- vcstools version: `0.1.42`
+
+
 ## move_basic (kinetic) - 0.4.1-2
 
 The packages in the `move_basic` repository were released into the `kinetic` distro by running `/usr/bin/bloom-release move_basic --rosdistro kinetic --track kinetic` on `Wed, 24 Mar 2021 15:27:37 -0000`
